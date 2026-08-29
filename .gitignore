@@ -1,0 +1,5 @@
+﻿.env
+documentos/
+cache_parcial.npy
+__pycache__/
+.venv/
