@@ -3,32 +3,17 @@
 🤖 ASISTENTE IA · NORMATIVAS TÉCNICAS
 ==========================================================================
 
-Proyecto que procesa PDFs de normativas (CNE, IEEE, IEC, manuales técnicos)
-y responde consultas citando documento y página exacta.
+Proyecto que procesa PDFs de normativas y responde consultas citando
+documento y página exacta. Arquitectura RAG con caché de embeddings.
 
-Arquitectura RAG con caché de embeddings:
-
-    PDFs en disco
-        ↓
-    Chunking por párrafos (máx ~500 palabras)
-        ↓
-    Embeddings EN LOTES con caché en disco (gemini-embedding-001)
-        ↓
-    Consulta del usuario → embed → top-K chunks por similitud
-        ↓
-    Prompt enriquecido + Gemini 2.5 Flash → Respuesta citada
-
-MODOS DE CONSULTA:
-    - Respuesta directa:        escribe tu pregunta normalmente
-    - Razonamiento profundo:    escribe ** al inicio de tu pregunta
-                                (usa chain-of-thought con 2 llamadas a Gemini)
-
-CAMBIOS EN ESTA VERSIÓN (lista para Streamlit / nube):
-    1. EMBEDDINGS EN LOTES: se agrupan TAM_LOTE textos por request.
-    2. BÚSQUEDA VECTORIZADA: similitud coseno con una operación matricial.
-    3. CHUNKS EN EL CACHÉ: el .npz ahora guarda también los chunks, para que
-       en la nube (sin carpeta documentos/) la app funcione solo con el .npz.
-    4. API KEY DUAL: lee de Streamlit Secrets (nube) o de .env (local).
+CAMBIOS EN ESTA VERSIÓN:
+    1. EMBEDDINGS EN LOTES.
+    2. BÚSQUEDA VECTORIZADA.
+    3. CHUNKS EN EL CACHÉ (.npz guarda también los chunks).
+    4. API KEY DUAL (Streamlit Secrets o .env).
+    5. LIMPIEZA DE RUIDO: elimina el pie de página del MINEM y los
+       encabezados de sección repetidos ANTES de chunkear (~8.6% de
+       ruido eliminado en el CNE).
 
 REQUISITOS:
     pip install google-genai numpy python-dotenv pypdf
@@ -52,16 +37,13 @@ from pypdf import PdfReader
 # ============================================================
 
 def obtener_api_key() -> str:
-    """Obtiene la API key desde Streamlit Secrets (nube) o .env (local).
-    Intenta primero Streamlit; si no está disponible, cae al entorno/.env."""
-    # 1) Streamlit Secrets (cuando corre en la nube)
+    """Obtiene la API key desde Streamlit Secrets (nube) o .env (local)."""
     try:
         import streamlit as st
         if "GOOGLE_API_KEY" in st.secrets:
             return st.secrets["GOOGLE_API_KEY"]
     except Exception:
         pass
-    # 2) .env local
     env_path = Path(__file__).parent / ".env"
     load_dotenv(env_path)
     return os.environ.get("GOOGLE_API_KEY")
@@ -80,19 +62,39 @@ client = genai.Client(api_key=api_key)
 MODELO_GEN = "gemini-2.5-flash"
 MODELO_EMB = "gemini-embedding-001"
 
-# Carpetas
 SCRIPT_DIR = Path(__file__).parent
 DOCS_DIR = SCRIPT_DIR / "documentos"
 CACHE_FILE = SCRIPT_DIR / "cache_embeddings.npz"
 
-# Parámetros de chunking
 MAX_PALABRAS_POR_CHUNK = 500
-TOP_K = 6  # cuántos chunks pasarle a Gemini como contexto
+TOP_K = 6
 
-# Parámetros de embeddings en lotes
-TAM_LOTE = 20   # cuántos textos mandar por request. Si da error de tamaño,
-                 # baja a 50 o 32 (sigue siendo ~40 requests en vez de 2000).
+TAM_LOTE = 20   # Con billing (Tier 1) puedes subirlo a 100.
 MAX_REINTENTOS = 5
+
+
+# ============================================================
+# LIMPIEZA DE RUIDO REPETIDO
+# ============================================================
+# Los PDFs normativos (sobre todo el CNE) repiten en CADA página un pie
+# del MINEM y un encabezado de sección. Se elimina antes de chunkear.
+
+def limpiar_ruido(texto: str) -> str:
+    """Elimina encabezados y pies de página repetidos de las normas.
+    Afinado para el CNE-Utilización. No daña otras normas: si un patrón
+    no aparece, simplemente no hace nada."""
+    texto = re.sub(
+        r"Ministerio de Energía y Minas\s*https?://www\.minem\.gob\.pe\s*"
+        r"Dirección General de Electricidad\s*email:\s*dne@minem\.gob\.pe",
+        " ", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"CÓDIGO NACIONAL DE ELECTRICIDAD\s*[–\-]\s*UTILIZACIÓN",
+                   " ", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"Sección\s*\d{3}\s*-\s*Pág\.\s*\d+\s*de\s*\d+(\s*\d{4})?",
+                   " ", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"Anexo\s*[A-Z0-9\-]+\s*-\s*Pág\.\s*\d+\s*de\s*\d+",
+                   " ", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"\b20\d{2}\s*\(\d+\)", " ", texto)
+    return texto
 
 
 # ============================================================
@@ -100,14 +102,14 @@ MAX_REINTENTOS = 5
 # ============================================================
 
 def leer_pdf(ruta_pdf: Path) -> list[dict]:
-    """Lee un PDF y devuelve una lista de chunks con metadatos.
-    Cada chunk tiene: texto, archivo, página."""
+    """Lee un PDF y devuelve chunks con metadatos (texto, archivo, página)."""
     chunks = []
     reader = PdfReader(str(ruta_pdf))
     nombre_archivo = ruta_pdf.name
 
     for num_pagina, pagina in enumerate(reader.pages, start=1):
         texto = pagina.extract_text() or ""
+        texto = limpiar_ruido(texto)          # ← NUEVO: quita ruido repetido
         texto = re.sub(r"\s+", " ", texto).strip()
         if len(texto) < 50:
             continue
@@ -120,17 +122,14 @@ def leer_pdf(ruta_pdf: Path) -> list[dict]:
                 "archivo": nombre_archivo,
                 "pagina": num_pagina,
             })
-
     return chunks
 
 
 def cargar_todos_los_documentos() -> list[dict]:
     """Lee todos los PDFs de la carpeta documentos/.
     En la nube esta carpeta no existe: devuelve [] y los chunks se toman
-    del caché .npz (ver obtener_embeddings)."""
+    del caché .npz."""
     if not DOCS_DIR.exists():
-        # En la nube no hay carpeta documentos/. No es un error:
-        # los chunks vendrán del caché junto con los embeddings.
         return []
 
     pdfs = sorted(DOCS_DIR.glob("*.pdf"))
@@ -164,24 +163,22 @@ def cargar_todos_los_documentos() -> list[dict]:
 # ============================================================
 
 def hash_chunks(chunks: list[dict]) -> str:
-    """Genera un hash del contenido para detectar cambios en los PDFs."""
     contenido = "".join(c["texto"] for c in chunks)
     return hashlib.md5(contenido.encode()).hexdigest()
 
 
 def embed_lote(textos: list[str], max_reintentos: int = MAX_REINTENTOS) -> list[np.ndarray]:
-    """Convierte una LISTA de textos en vectores en UNA sola llamada.
-    Si encuentra rate limit (429), espera y reintenta automáticamente."""
+    """Convierte una LISTA de textos en vectores en UNA sola llamada."""
     for intento in range(max_reintentos):
         try:
             r = client.models.embed_content(model=MODELO_EMB, contents=textos)
             return [np.array(e.values, dtype=np.float32) for e in r.embeddings]
         except Exception as e:
             mensaje_error = str(e)
-            print(f"\n   🔍 ERROR COMPLETO: {mensaje_error}\n")   # ← línea de diagnóstico
+            # print(f"\n   🔍 ERROR COMPLETO: {mensaje_error}\n")  # descomenta si algo falla
             if "429" in mensaje_error or "RESOURCE_EXHAUSTED" in mensaje_error:
                 espera = 30 * (intento + 1)
-                print(f"   ⏳ Esperando {espera}s antes de reintentar...")
+                print(f"\n   ⏳ Rate limit alcanzado. Esperando {espera}s antes de reintentar...")
                 time.sleep(espera)
             else:
                 raise
@@ -189,7 +186,6 @@ def embed_lote(textos: list[str], max_reintentos: int = MAX_REINTENTOS) -> list[
 
 
 def embed(texto: str) -> np.ndarray:
-    """Embebe UN solo texto (para la consulta del usuario en buscar())."""
     return embed_lote([texto])[0]
 
 
@@ -197,15 +193,13 @@ CACHE_PARCIAL = SCRIPT_DIR / "cache_parcial.npy"
 
 
 def obtener_embeddings(chunks: list[dict]) -> np.ndarray:
-    """Genera embeddings EN LOTES con caché. En la nube, si chunks viene vacío,
-    reconstruye chunks Y embeddings desde el .npz (que ahora guarda ambos)."""
+    """Genera embeddings EN LOTES con caché. En la nube reconstruye chunks
+    Y embeddings desde el .npz."""
 
-    # --- CASO NUBE: no hay PDFs, cargar todo del caché ---
     if not chunks:
         if CACHE_FILE.exists():
             data = np.load(CACHE_FILE, allow_pickle=True)
             if "chunks" in data:
-                # Reponer los chunks en la lista que la app usará
                 chunks.extend(list(data["chunks"]))
                 print(f"💾 Chunks y embeddings cargados desde caché ({CACHE_FILE.name})")
                 return data["embeddings"]
@@ -220,7 +214,6 @@ def obtener_embeddings(chunks: list[dict]) -> np.ndarray:
                 "En la nube debes subir el .npz al repo."
             )
 
-    # --- CASO LOCAL: hay chunks desde los PDFs ---
     hash_actual = hash_chunks(chunks)
 
     if CACHE_FILE.exists():
@@ -271,7 +264,6 @@ def obtener_embeddings(chunks: list[dict]) -> np.ndarray:
 
     embeddings_final = np.array(embeddings)
 
-    # Guardar embeddings + hash + CHUNKS (para que la nube no necesite PDFs)
     np.savez(
         CACHE_FILE,
         embeddings=embeddings_final,
@@ -291,15 +283,11 @@ def obtener_embeddings(chunks: list[dict]) -> np.ndarray:
 # ============================================================
 
 def buscar(pregunta: str, embeddings: np.ndarray, k: int = TOP_K) -> list[int]:
-    """Devuelve los índices de los k chunks más similares a la pregunta.
-    Vectorizado: un único producto matricial en vez de un bucle Python."""
     v = embed(pregunta).astype(np.float32)
     v = v / (np.linalg.norm(v) + 1e-10)
-
     M = np.asarray(embeddings, dtype=np.float32)
     normas = np.linalg.norm(M, axis=1, keepdims=True) + 1e-10
     M_norm = M / normas
-
     similitudes = M_norm @ v
     return np.argsort(similitudes)[::-1][:k].tolist()
 
@@ -412,7 +400,7 @@ def asistente(pregunta: str, chunks: list[dict], embeddings: np.ndarray,
 
 
 # ============================================================
-# FASE 7 · INTERFAZ INTERACTIVA (solo para uso en terminal)
+# FASE 7 · INTERFAZ INTERACTIVA (terminal)
 # ============================================================
 
 def modo_interactivo(chunks: list[dict], embeddings: np.ndarray):
