@@ -3,3 +3,6 @@ documentos/
 cache_parcial.npy
 __pycache__/
 .venv/
+__pycache__/
+.pytest_cache/
+

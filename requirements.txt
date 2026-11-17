@@ -3,3 +3,4 @@ google-genai
 numpy
 python-dotenv
 pypdf
+pydantic>=2.0
