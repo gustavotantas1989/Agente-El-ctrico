@@ -23,6 +23,7 @@ class Conductor:
     x_ohm_km: float      # reactancia (depende de la disposición; aquí, la típica)
     icat_a: float        # ampacidad de catálogo en condiciones base
     fuente: str          # de dónde salió el dato (para reemplazarlo luego)
+    aislado: bool = True # False solo para aéreo desnudo (AAAC); el autoportante NA2XSA2Y-S es aéreo aislado
 
 
 # Constante k de la corriente de cortocircuito admisible: Ikm = k * S / raiz(t)
@@ -45,9 +46,11 @@ CATALOGO = {
         Conductor("N2XSY-50", "subterraneo", "Cu", 50, 0.4937, 0.1657, 250,
                   "Tesis Palomino 2021 (r, x) y Aliaga 2022 (Icat)"),
         Conductor("AAAC-70", "aereo", "AAAC", 70, 0.482, 0.43, 0,
-                  "Exp. ASR (r); x típica; Icat POR COMPLETAR"),
+                  "Exp. ASR (r); x típica; Icat POR COMPLETAR", aislado=False),
         Conductor("AAAC-120", "aereo", "AAAC", 120, 0.2877, 0.43, 0,
-                  "Exp. Redondos (r); x típica; Icat POR COMPLETAR"),
+                  "Exp. Redondos (r); x típica; Icat POR COMPLETAR", aislado=False),
+        Conductor("NA2XSA2Y-S-35", "aereo", "Al", 35, 0.904, 0.44, 0,
+                  "Exp. aprobado Caracoto, Electro Puno (r a 40 °C, x); Icat POR COMPLETAR"),
     ]
 }
 
