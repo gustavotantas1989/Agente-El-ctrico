@@ -229,6 +229,13 @@ class SitioYCriterios(BaseModel):
     dv_previo_punto_diseno_pct: float = Field(default=0.0, ge=0, le=5)
     factor_reserva: float = Field(default=1.0, ge=1.0, le=1.5)
     base_corriente: BaseCorriente = BaseCorriente.POTENCIA_INSTALADA
+    # Puesta a tierra (sesión 6). Por defecto: varilla de cobre 2.4 m × 5/8" (15.88 mm)
+    varilla_longitud_m: float = Field(default=2.4, gt=0, le=10)
+    varilla_diametro_mm: float = Field(default=15.88, gt=0, le=50)
+    factor_tratamiento_pat: float = Field(
+        default=1.0, gt=0, le=1.0,
+        description="Multiplica la R calculada si hay tratamiento del terreno (1.0 = sin tratamiento)")
+    r_pat_max_ohm: float = Field(default=25.0, gt=0, description="Límite de la concesionaria o del CNE")
 
 
 # ---------------------------------------------------------------------------

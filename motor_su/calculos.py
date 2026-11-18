@@ -10,6 +10,10 @@ con el valor, su unidad, el límite contra el que se compara y si cumple.
 Sesión 1: corriente nominal y corriente de diseño.
 Sesión 2: corriente de cortocircuito y cortocircuito admisible del cable (Ikm).
 Sesión 3: caída de tensión (incluida la caída previa hasta el punto de diseño).
+Sesión 5: Pcc en barras de la subestación y fusible mínimo sugerido.
+Sesión 6: resistencia de puesta a tierra (Dwight, IEEE 80 / IEEE 142).
+Sesión 7: calcular_proyecto, el informe completo.
+(La sesión 4, ampacidad corregida, espera las tablas de factores de Indeco.)
 """
 
 import math
@@ -17,7 +21,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .conductores import K_IKM, buscar_conductor
-from .modelos import BaseCorriente, ProyectoSU
+from .modelos import BaseCorriente, ProyectoSU, TipoSubestacion
 
 
 # ---------------------------------------------------------------------------
@@ -246,3 +250,157 @@ def calcular_caida_tension(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
             cumple=total_pct <= admisible,
         ))
     return resultados
+
+
+# ---------------------------------------------------------------------------
+# Sesión 5: Pcc en barras de la subestación
+# ---------------------------------------------------------------------------
+
+def pcc_en_barras(pcc_mva: float, v_kv: float, r_ohm: float, x_ohm: float) -> float:
+    """
+    Pcc al final del cable, en barras de la SE.
+    Z sistema = V² / Pcc (se toma como reactancia pura), Z cable = R + jX.
+    Pcc barras = V² / |Z sistema + Z cable|.  (MVA, con V en kV y Z en ohmios)
+    """
+    if pcc_mva <= 0:
+        raise ValueError(f"La Pcc debe ser positiva (llegó {pcc_mva} MVA)")
+    z_sistema = v_kv ** 2 / pcc_mva            # ohmios
+    z_total = abs(complex(r_ohm, z_sistema + x_ohm))
+    return v_kv ** 2 / z_total
+
+
+def calcular_pcc_barras(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
+    """Pcc e Icc en barras de la SE, sumando la impedancia de todos los tramos."""
+    r_total = x_total = 0.0
+    for tramo in proyecto.tramos:
+        c = buscar_conductor(tramo.conductor)
+        r_total += c.r_ohm_km * tramo.longitud_m / 1000
+        x_total += c.x_ohm_km * tramo.longitud_m / 1000
+    resultados = []
+    for v, pcc in pcc_por_tension(proyecto).items():
+        pcc_b = pcc_en_barras(pcc, v, r_total, x_total)
+        resultados.append(ResultadoCalculo(
+            nombre=f"Pcc en barras de la SE a {v:g} kV",
+            valor=pcc_b,
+            unidad="MVA",
+            formula=f"Pcc = V² / |j·V²/{pcc:g} + ({r_total:.4f} + j{x_total:.4f})|",
+        ))
+        resultados.append(ResultadoCalculo(
+            nombre=f"Icc en barras de la SE a {v:g} kV",
+            valor=corriente_cortocircuito(pcc_b, v),
+            unidad="kA",
+            formula="Icc = Pcc barras / (√3 × V)",
+        ))
+    return resultados
+
+
+# ---------------------------------------------------------------------------
+# Sesión 5: fusible mínimo sugerido
+# ---------------------------------------------------------------------------
+
+# Calibres comerciales. Tipo K (cut-out, SE aéreas): ANSI C37.42.
+# Tipo HH (celdas, SE caseta o interior): IEC 60282-1.
+FUSIBLES_K = [1, 2, 3, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 65, 80, 100, 140, 200]
+FUSIBLES_HH = [6.3, 10, 16, 20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200]
+FACTOR_FUSIBLE = 1.5  # criterio CNE: 1.5 × In y el calibre comercial siguiente
+
+SE_CON_CELDAS = {TipoSubestacion.CASETA, TipoSubestacion.INTERIOR_EDIFICIO,
+                 TipoSubestacion.COMPACTA}
+
+
+def fusible_minimo(in_a: float, serie: list[float], factor: float = FACTOR_FUSIBLE) -> float:
+    """Primer calibre comercial ≥ factor × In."""
+    requerido = factor * in_a
+    for calibre in serie:
+        if calibre >= requerido:
+            return calibre
+    raise ValueError(f"No hay fusible comercial ≥ {requerido:.1f} A en la serie")
+
+
+def calcular_fusibles(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
+    """
+    Fusible mínimo sugerido para cada transformador y tensión.
+    Es una PROPUESTA (cumple = None): los trafos pequeños suelen llevar fusibles
+    de ~1.0-1.1 × In por tabla del fabricante (caso Caracoto, 3K para 2.89 A).
+    La tabla de fusibles por potencia y tensión queda como afinamiento (regla R11).
+    """
+    resultados = []
+    for se in proyecto.subestaciones:
+        con_celdas = se.tipo in SE_CON_CELDAS
+        serie, tipo = (FUSIBLES_HH, "HH") if con_celdas else (FUSIBLES_K, "K")
+        for trafo in se.transformadores:
+            for v in tensiones_de_calculo(proyecto):
+                in_a = corriente_nominal(trafo.kva, v)
+                resultados.append(ResultadoCalculo(
+                    nombre=f"Fusible {tipo} sugerido, trafo {trafo.kva:g} kVA a {v:g} kV",
+                    valor=fusible_minimo(in_a, serie),
+                    unidad="A",
+                    formula=f"Calibre comercial ≥ {FACTOR_FUSIBLE} × In = {FACTOR_FUSIBLE} × {in_a:.2f} A",
+                ))
+    return resultados
+
+
+# ---------------------------------------------------------------------------
+# Sesión 6: puesta a tierra
+# ---------------------------------------------------------------------------
+
+def resistencia_varilla(rho_ohm_m: float, l_m: float, d_m: float) -> float:
+    """
+    Resistencia de una varilla vertical (H. B. Dwight, 1936; IEEE 80 e IEEE 142):
+        R = ρ / (2πL) × (ln(4L / a) − 1),   con a = RADIO = d / 2.
+    Ojo: varios expedientes ponen el diámetro donde va el radio y subestiman R ~11 %.
+    """
+    if rho_ohm_m <= 0 or l_m <= 0 or d_m <= 0:
+        raise ValueError("Resistividad, longitud y diámetro deben ser positivos")
+    a = d_m / 2
+    return rho_ohm_m / (2 * math.pi * l_m) * (math.log(4 * l_m / a) - 1)
+
+
+def calcular_puesta_tierra(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
+    sitio = proyecto.sitio
+    r = resistencia_varilla(sitio.resistividad_ohm_m, sitio.varilla_longitud_m,
+                            sitio.varilla_diametro_mm / 1000)
+    r_final = r * sitio.factor_tratamiento_pat
+    formula = (f"R = {sitio.resistividad_ohm_m:g} / (2π × {sitio.varilla_longitud_m:g}) × "
+               f"(ln(4 × {sitio.varilla_longitud_m:g} / {sitio.varilla_diametro_mm / 2000:g}) − 1)")
+    if sitio.factor_tratamiento_pat < 1:
+        formula += f" × {sitio.factor_tratamiento_pat:g} (tratamiento)"
+    return [ResultadoCalculo(
+        nombre="Resistencia de puesta a tierra (una varilla)",
+        valor=r_final,
+        unidad="Ω",
+        formula=formula,
+        limite=sitio.r_pat_max_ohm,
+        cumple=r_final <= sitio.r_pat_max_ohm,
+    )]
+
+
+# ---------------------------------------------------------------------------
+# Sesión 7: el informe completo
+# ---------------------------------------------------------------------------
+
+def calcular_proyecto(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
+    """Corre toda la cadena de cálculo, en orden, y devuelve el informe completo."""
+    return (calcular_corrientes(proyecto)
+            + calcular_cortocircuito(proyecto)
+            + calcular_caida_tension(proyecto)
+            + calcular_pcc_barras(proyecto)
+            + calcular_fusibles(proyecto)
+            + calcular_puesta_tierra(proyecto))
+
+
+def imprimir_informe(proyecto: ProyectoSU) -> str:
+    """Informe en texto: resultados, observaciones y advertencias."""
+    resultados = calcular_proyecto(proyecto)
+    lineas = [f"INFORME DE CÁLCULO — {proyecto.nombre}", ""]
+    lineas += [f"  {r}" for r in resultados]
+    fallas = [r for r in resultados if r.cumple is False]
+    ok = sum(r.cumple is True for r in resultados)
+    lineas += ["", f"Verificaciones: {ok} cumple{'n' if ok != 1 else ''}, "
+                   f"{len(fallas)} no cumple{'n' if len(fallas) != 1 else ''}"]
+    for r in fallas:
+        lineas.append(f"  NO CUMPLE: {r.nombre}")
+    avisos = proyecto.advertencias()
+    if avisos:
+        lineas += ["", "Advertencias:"] + [f"  - {a}" for a in avisos]
+    return "\n".join(lineas)

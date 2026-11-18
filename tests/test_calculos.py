@@ -111,6 +111,7 @@ def datos_caracoto() -> dict:
             "transformadores": [{"kva": 50, "tension_primaria_kv": 10,
                                  "tension_secundaria_v": 380, "aislamiento": "aceite"}],
         }],
+        # ρ = 100 Ω·m es PROVISIONAL: la medición del expediente viene como imagen y no se pudo leer
         "sitio": {"concesionaria": "Otra", "altitud_msnm": 3825, "resistividad_ohm_m": 100},
     }
 
@@ -231,3 +232,92 @@ def test_caida_previa_puede_hacer_que_no_cumpla():
     assert total_20kv.cumple          # 4.99 + 0.008 = 4.998 % ≤ 5 %
     assert not total_10kv.cumple      # 4.99 + 0.032 = 5.022 % > 5 %
     assert "previo" in total_10kv.formula
+
+
+# --- Sesión 5: Pcc en barras y fusible --------------------------------------
+
+from motor_su.calculos import (
+    FUSIBLES_HH, FUSIBLES_K, calcular_fusibles, calcular_pcc_barras,
+    calcular_proyecto, calcular_puesta_tierra, fusible_minimo, imprimir_informe,
+    pcc_en_barras, resistencia_varilla,
+)
+
+
+def test_pcc_barras_palomino():
+    """Tesis Palomino: 230 MVA a 22.9 kV + N2XSY 50 de 355 m → 223.6 MVA."""
+    pcc = pcc_en_barras(230, 22.9, 0.4937 * 0.355, 0.1657 * 0.355)
+    assert pcc == pytest.approx(223.6, abs=0.1)
+
+
+def test_pcc_barras_sol_de_olmos_coincide_con_expediente():
+    """El expediente reporta 129 MVA (20 kV) y 49.5 MVA (10 kV)."""
+    resultados = calcular_pcc_barras(ProyectoSU(**datos_sol_de_olmos()))
+    pcc = {r.nombre: r.valor for r in resultados if r.unidad == "MVA"}
+    assert pcc["Pcc en barras de la SE a 20 kV"] == pytest.approx(129.1, abs=0.1)
+    assert pcc["Pcc en barras de la SE a 10 kV"] == pytest.approx(49.46, abs=0.05)
+
+
+def test_fusible_k_bravo():
+    """Tesis Bravo: In 25.21 A × 1.5 = 37.8 A → 40 A."""
+    assert fusible_minimo(25.21, FUSIBLES_K) == 40
+
+
+def test_fusible_hh_sol_de_olmos_10kv_coincide():
+    """Sol de Olmos usa 63 A a 10 kV: 1.5 × 36.37 = 54.6 A → 63 A (serie HH)."""
+    assert fusible_minimo(36.37, FUSIBLES_HH) == 63
+
+
+def test_fusible_usa_serie_segun_tipo_de_se():
+    caseta = calcular_fusibles(ProyectoSU(**datos_sol_de_olmos()))
+    monoposte = calcular_fusibles(ProyectoSU(**datos_caracoto()))
+    assert all("HH" in r.nombre for r in caseta)
+    assert all(" K " in r.nombre for r in monoposte)
+    assert all(r.cumple is None for r in caseta + monoposte)  # son propuestas
+
+
+# --- Sesión 6: puesta a tierra ----------------------------------------------
+
+def test_pat_palomino_con_radio_ieee():
+    """ρ 46 Ω·m, varilla 2.4 m × 15.88 mm: 18.60 Ω con el RADIO (IEEE 80/142).
+    El expediente, con el diámetro, reporta 16.49 Ω (11 % menos)."""
+    assert resistencia_varilla(46, 2.4, 0.01588) == pytest.approx(18.60, abs=0.01)
+
+
+def test_pat_varilla_mas_larga_baja_la_resistencia():
+    assert resistencia_varilla(100, 3.0, 0.01588) < resistencia_varilla(100, 2.4, 0.01588)
+
+
+def test_pat_sol_de_olmos_sin_tratamiento_no_cumple():
+    """ρ 148 Ω·m con una varilla da ~60 Ω > 25 Ω: el expediente también pide tratamiento."""
+    (r,) = calcular_puesta_tierra(ProyectoSU(**datos_sol_de_olmos()))
+    assert r.valor == pytest.approx(59.85, abs=0.05)
+    assert not r.cumple
+
+
+def test_pat_con_tratamiento_cumple():
+    d = datos_sol_de_olmos()
+    d["sitio"]["factor_tratamiento_pat"] = 0.35
+    (r,) = calcular_puesta_tierra(ProyectoSU(**d))
+    assert r.valor == pytest.approx(59.85 * 0.35, abs=0.05)
+    assert r.cumple
+    assert "tratamiento" in r.formula
+
+
+def test_pat_rechaza_resistividad_cero():
+    with pytest.raises(ValueError):
+        resistencia_varilla(0, 2.4, 0.01588)
+
+
+# --- Sesión 7: informe completo ---------------------------------------------
+
+def test_calcular_proyecto_junta_toda_la_cadena():
+    resultados = calcular_proyecto(ProyectoSU(**datos_sol_de_olmos()))
+    # 4 corrientes + 4 cortocircuito + 4 caída + 4 Pcc barras + 2 fusibles + 1 PAT
+    assert len(resultados) == 19
+
+
+def test_informe_lista_lo_que_no_cumple():
+    texto = imprimir_informe(ProyectoSU(**datos_sol_de_olmos()))
+    assert "INFORME DE CÁLCULO — Agropecuaria Sol de Olmos" in texto
+    assert "NO CUMPLE: Resistencia de puesta a tierra" in texto
+    assert "R10" in texto  # advertencia: resistividad sin fecha de medición
