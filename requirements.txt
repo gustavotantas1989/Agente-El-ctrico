@@ -4,3 +4,4 @@ numpy
 python-dotenv
 pypdf
 pydantic>=2.0
+pandas
