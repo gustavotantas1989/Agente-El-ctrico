@@ -16,8 +16,9 @@ from pydantic import ValidationError
 
 from motor_su.calculos import calcular_proyecto, imprimir_informe
 from motor_su.conductores import CATALOGO
-from motor_su.ejemplos import EJEMPLOS
+from motor_su.ejemplos import DECLARADOS, EJEMPLOS
 from motor_su.factores import INSTALACIONES
+from motor_su.revisor import ValorDeclarado, comparar, informe_revision, resumen
 from motor_su.modelos import (
     TAMANOS_COMERCIALES_KVA, Aislamiento, BaseCorriente, Concesionaria,
     ProyectoSU, TipoRed, TipoSubestacion, TipoTramite,
@@ -25,7 +26,7 @@ from motor_su.modelos import (
 
 st.set_page_config(page_title="Calcular sistema de utilización", page_icon="⚡", layout="wide")
 
-st.title("⚡ Calcular sistema de utilización")
+st.title("⚡ Calcular y revisar sistema de utilización")
 st.caption(
     "Versión preliminar del motor de cálculo (Fase 2). Calcula corrientes, cortocircuito, "
     "ampacidad corregida, caída de tensión, Pcc en barras, fusible sugerido y puesta a tierra. "
@@ -249,20 +250,26 @@ def explicar_errores(err: ValidationError) -> list[str]:
 # Botón Calcular y resultados
 # ---------------------------------------------------------------------------
 st.divider()
+_clave_calc = f"{k}proyecto_calculado"
 if st.button("⚡ Calcular", type="primary", width="stretch"):
     try:
-        proyecto = ProyectoSU(**armar_datos())
+        st.session_state[_clave_calc] = ProyectoSU(**armar_datos())
     except ValidationError as err:
+        st.session_state.pop(_clave_calc, None)
         st.error("Hay datos que revisar antes de calcular:")
         for m in explicar_errores(err):
             st.markdown(f"- {m}")
         st.stop()
 
+# Los resultados se guardan en la sesión para que no se borren al usar el Revisor.
+proyecto = st.session_state.get(_clave_calc)
+if proyecto is not None:
     resultados = calcular_proyecto(proyecto)
     ok = sum(r.cumple is True for r in resultados)
     fallas = [r for r in resultados if r.cumple is False]
 
     st.header(f"Resultados — {proyecto.nombre}")
+    st.caption("Si cambias datos del formulario, vuelve a presionar ⚡ Calcular.")
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Máxima demanda", f"{proyecto.cuadro_de_cargas.maxima_demanda_kw:.1f} kW")
     m2.metric("Transformación instalada", f"{proyecto.potencia_instalada_kva:g} kVA")
@@ -297,5 +304,87 @@ if st.button("⚡ Calcular", type="primary", width="stretch"):
 
     st.caption("El fusible es una PROPUESTA (1.5·In → calibre comercial siguiente) "
                "hasta tener la tabla de fusibles por potencia de la concesionaria.")
-    st.download_button("📄 Descargar informe (.txt)", imprimir_informe(proyecto),
+    st.download_button("📄 Descargar informe de cálculo (.txt)", imprimir_informe(proyecto),
                        file_name=f"informe_{proyecto.nombre.replace(' ', '_')}.txt")
+
+    # -----------------------------------------------------------------------
+    # 6. Revisor v1: contraste contra lo que declara el expediente
+    # -----------------------------------------------------------------------
+    st.divider()
+    st.header("6. Revisar contra lo declarado en el expediente")
+    st.caption(
+        "Escribe en la columna **Valor declarado** lo que presenta el proyectista. "
+        "Deja vacío lo que el expediente no presenta. Marca **Imagen** si el resultado "
+        "viene como pantallazo (p. ej. DIgSILENT). Tolerancia: ±2 %."
+    )
+    previos = {d["clave"]: d for d in DECLARADOS.get(eleccion, lambda: [])()}
+    filas = []
+    for r in resultados:
+        d = previos.get(r.clave, {})
+        filas.append({
+            "clave": r.clave,
+            "Cálculo": r.nombre,
+            "Recalculado": round(r.valor, 4),
+            "Unidad motor": r.unidad,
+            "Valor declarado": d.get("valor"),
+            "Unidad declarada": d.get("unidad", r.unidad),
+            "Referencia": d.get("referencia", ""),
+            "Imagen": bool(d.get("no_verificable", False)),
+        })
+    declarados_df = st.data_editor(
+        pd.DataFrame(filas), hide_index=True, width="stretch", key=f"{k}declarados",
+        disabled=["clave", "Cálculo", "Recalculado", "Unidad motor"],
+        column_config={
+            "clave": None,  # oculta: solo sirve para emparejar
+            "Valor declarado": st.column_config.NumberColumn("Valor declarado", format="%.4g"),
+            "Unidad declarada": st.column_config.SelectboxColumn(
+                "Unidad declarada", options=["A", "kA", "V", "kV", "%", "MVA", "kVA", "Ω"]),
+            "Referencia": st.column_config.TextColumn("Referencia (cap./pág.)"),
+            "Imagen": st.column_config.CheckboxColumn("Imagen"),
+        },
+    )
+
+    if st.button("🔍 Revisar", type="primary", width="stretch"):
+        declarados = []
+        for fila in declarados_df.to_dict("records"):
+            valor = fila["Valor declarado"]
+            hay_valor = valor is not None and not pd.isna(valor)
+            if hay_valor or fila["Imagen"]:
+                declarados.append(ValorDeclarado(
+                    clave=fila["clave"],
+                    valor=float(valor) if hay_valor else None,
+                    unidad=fila["Unidad declarada"] or None,
+                    referencia=fila["Referencia"] or "",
+                    no_verificable=bool(fila["Imagen"]),
+                ))
+        comparaciones = comparar(resultados, declarados)
+        conteo = resumen(comparaciones)
+        observaciones = [c for c in comparaciones if c.es_observacion]
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("✅ Coinciden", conteo["coincide"])
+        c2.metric("❌ Difieren", conteo["difiere"])
+        c3.metric("⚪ No declarados", conteo["no declarado"])
+        c4.metric("🖼️ No verificables", conteo["no verificable"])
+
+        if observaciones:
+            st.error(f"{len(observaciones)} observación(es) para el proyectista")
+        else:
+            st.success("Todo lo declarado coincide con el recálculo.")
+
+        iconos = {"coincide": "✅", "difiere": "❌", "no declarado": "⚪",
+                  "no verificable": "🖼️", "clave desconocida": "❓"}
+        orden = sorted(comparaciones, key=lambda c: not c.es_observacion)
+        st.dataframe(pd.DataFrame([{
+            "Estado": f"{iconos[c.estado.value]} {c.estado.value}",
+            "Cálculo": c.nombre,
+            "Declarado": "" if c.declarado is None else f"{c.declarado:.4g}",
+            "Recalculado": "" if c.calculado is None else f"{c.calculado:.4g}",
+            "Unidad": c.unidad,
+            "Diferencia": "" if c.diferencia_pct is None else f"{c.diferencia_pct:+.1f} %",
+            "Referencia": c.referencia,
+            "Observación": c.mensaje,
+        } for c in orden]), width="stretch", hide_index=True)
+
+        st.download_button("📄 Descargar contraste (.txt)", informe_revision(comparaciones),
+                           file_name=f"revision_{proyecto.nombre.replace(' ', '_')}.txt")

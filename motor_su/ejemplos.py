@@ -110,3 +110,35 @@ EJEMPLOS = {
     "Ejemplo: Sol de Olmos (subterránea, caseta, 20/10 kV)": sol_de_olmos,
     "Ejemplo: Caracoto (aérea, monoposte, 10 kV)": caracoto,
 }
+
+
+def declarados_sol_de_olmos() -> list[dict]:
+    """
+    Resultados que DECLARA el expediente Sol de Olmos (Cálculos Justificativos, pp. 47–52).
+    Sirven para probar el Revisor: se comparan contra lo que recalcula el motor.
+    """
+    return [
+        {"clave": "idis_10kv", "valor": 45.46, "unidad": "A", "referencia": "5.1, p. 47"},
+        {"clave": "idis_20kv", "valor": 22.74, "unidad": "A", "referencia": "5.1, p. 47"},
+        {"clave": "ampacidad_t1", "valor": 214.27, "unidad": "A", "referencia": "5.1, p. 47"},
+        {"clave": "dv_t1_10kv", "valor": 3.19, "unidad": "V", "referencia": "5.1, p. 48"},
+        {"clave": "dv_t1_20kv", "valor": 1.60, "unidad": "V", "referencia": "5.1, p. 48"},
+        {"clave": "dv_total_10kv", "valor": 0.0319, "unidad": "%", "referencia": "5.1, p. 48"},
+        {"clave": "dv_total_20kv", "valor": 0.008, "unidad": "%", "referencia": "5.1, p. 48"},
+        {"clave": "icc_10kv", "valor": 2.89, "unidad": "kA", "referencia": "5.1, p. 48"},
+        {"clave": "icc_20kv", "valor": 3.75, "unidad": "kA", "referencia": "5.1, p. 48"},
+        {"clave": "ikm_NA2XSY-120_10kv", "valor": 80.61, "unidad": "kA", "referencia": "5.1, p. 48"},
+        {"clave": "ikm_NA2XSY-120_20kv", "valor": 80.61, "unidad": "kA", "referencia": "5.1, p. 48"},
+        {"clave": "pcc_barras_10kv", "valor": 49.50, "unidad": "MVA", "referencia": "3.2.1, p. 49"},
+        {"clave": "icc_barras_10kv", "valor": 2.86, "unidad": "kA", "referencia": "3.2.1, p. 49"},
+        {"clave": "pcc_barras_20kv", "valor": 129.03, "unidad": "MVA", "referencia": "3.2.2, p. 50"},
+        {"clave": "fusible_se1_tr1_10kv", "valor": 63, "unidad": "A", "referencia": "3.3, p. 51"},
+        {"clave": "fusible_se1_tr1_20kv", "valor": 40, "unidad": "A", "referencia": "3.3, p. 52"},
+        {"clave": "r_pat", "valor": 57.57, "unidad": "Ω", "referencia": "3.4, p. 53"},
+    ]
+
+
+# Valores declarados de ejemplo, por nombre de ejemplo (los usa la página web)
+DECLARADOS = {
+    "Ejemplo: Sol de Olmos (subterránea, caseta, 20/10 kV)": declarados_sol_de_olmos,
+}

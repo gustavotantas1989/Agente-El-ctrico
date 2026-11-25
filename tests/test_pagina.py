@@ -25,15 +25,15 @@ def _calcular(ejemplo: str) -> AppTest:
 def test_pagina_calcula_sol_de_olmos():
     at = _calcular("Ejemplo: Sol de Olmos (subterránea, caseta, 20/10 kV)")
     assert not at.exception
-    assert len(at.dataframe) == 3  # cargas, tramos y resultados
-    assert len(at.dataframe[-1].value) == 20          # los 20 resultados del motor
+    assert len(at.dataframe) == 4  # cargas, tramos, resultados y valores declarados
+    assert len(at.dataframe[2].value) == 20          # los 20 resultados del motor
     assert "Resistencia de puesta a tierra" in at.error[0].value  # 59.85 Ω no cumple
 
 
 def test_pagina_calcula_caracoto():
     at = _calcular("Ejemplo: Caracoto (aérea, monoposte, 10 kV)")
     assert not at.exception
-    assert len(at.dataframe) == 3  # cargas, tramos y resultados
+    assert len(at.dataframe) == 4  # cargas, tramos, resultados y valores declarados
 
 
 def test_pagina_muestra_errores_de_datos():
@@ -45,3 +45,14 @@ def test_pagina_muestra_errores_de_datos():
     assert not at.exception
     assert "revisar" in at.error[0].value
     assert any("Pcc" in m.value for m in at.markdown)
+
+
+def test_pagina_revisa_sol_de_olmos():
+    """Calcular y luego Revisar: con lo declarado por Sol de Olmos salen 3 observaciones."""
+    at = _calcular("Ejemplo: Sol de Olmos (subterránea, caseta, 20/10 kV)")
+    revisar = [b for b in at.button if "Revisar" in b.label][0]
+    revisar.click().run()
+    assert not at.exception
+    assert "3 observación" in at.error[-1].value
+    contraste = at.dataframe[-1].value
+    assert (contraste["Estado"] == "❌ difiere").sum() == 3

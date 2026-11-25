@@ -38,6 +38,7 @@ class ResultadoCalculo:
     limite: Optional[float] = None   # contra qué se compara (si aplica)
     cumple: Optional[bool] = None    # None = es un dato, no una verificación
     norma: Optional[str] = None      # se completa en la Fase 3 con el RAG
+    clave: Optional[str] = None      # identificador fijo para el Revisor, ej. "icc_20kv"
 
     def __str__(self) -> str:
         # 4 cifras significativas: 18.19 A, 3.193 V, 0.03193 %
@@ -106,12 +107,14 @@ def calcular_corrientes(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
     resultados = []
     for v in tensiones_de_calculo(proyecto):
         resultados.append(ResultadoCalculo(
+            clave=f"in_{v:g}kv",
             nombre=f"Corriente nominal a {v:g} kV",
             valor=corriente_nominal(s, v),
             unidad="A",
             formula=f"In = S / (√3 × V) = {s:g} / (√3 × {v:g})",
         ))
         resultados.append(ResultadoCalculo(
+            clave=f"idis_{v:g}kv",
             nombre=f"Corriente de diseño a {v:g} kV",
             valor=corriente_diseno(s, v),
             unidad="A",
@@ -169,6 +172,7 @@ def calcular_cortocircuito(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
     for v, pcc in pcc_por_tension(proyecto).items():
         icc = corriente_cortocircuito(pcc, v)
         resultados.append(ResultadoCalculo(
+            clave=f"icc_{v:g}kv",
             nombre=f"Corriente de cortocircuito a {v:g} kV",
             valor=icc,
             unidad="kA",
@@ -178,6 +182,7 @@ def calcular_cortocircuito(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
             c = buscar_conductor(codigo)
             ikm = ikm_admisible(c.material, c.seccion_mm2, t)
             resultados.append(ResultadoCalculo(
+                clave=f"ikm_{codigo}_{v:g}kv",
                 nombre=f"Cortocircuito admisible {codigo} a {v:g} kV",
                 valor=ikm,
                 unidad="kA",
@@ -227,12 +232,13 @@ def calcular_caida_tension(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
     for v in tensiones_de_calculo(proyecto):
         i = corriente_nominal(s, v)
         total_v = 0.0
-        for tramo in proyecto.tramos:
+        for n, tramo in enumerate(proyecto.tramos, start=1):
             c = buscar_conductor(tramo.conductor)
             x = c.reactancia(tramo.disposicion)
             dv = caida_tension_v(i, tramo.longitud_m / 1000, c.r_ohm_km, x, cos_phi)
             total_v += dv
             resultados.append(ResultadoCalculo(
+                clave=f"dv_t{n}_{v:g}kv",
                 nombre=f"Caída de tensión tramo '{tramo.nombre}' a {v:g} kV",
                 valor=dv,
                 unidad="V",
@@ -244,6 +250,7 @@ def calcular_caida_tension(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
         if previo:
             formula += f" + {previo:g} % previo al punto de diseño"
         resultados.append(ResultadoCalculo(
+            clave=f"dv_total_{v:g}kv",
             nombre=f"Caída de tensión total a {v:g} kV",
             valor=total_pct,
             unidad="%",
@@ -291,11 +298,12 @@ def calcular_ampacidad(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
     v_min = min(tensiones)
     i_dis = corriente_diseno(s, v_min)
     resultados = []
-    for tramo in proyecto.tramos:
+    for n, tramo in enumerate(proyecto.tramos, start=1):
         if tramo.tipo != "subterraneo":
             continue
         valor, f = ampacidad_corregida(tramo)
         resultados.append(ResultadoCalculo(
+            clave=f"ampacidad_t{n}",
             nombre=f"Ampacidad corregida tramo '{tramo.nombre}' ({tramo.conductor}, {tramo.disposicion})",
             valor=valor,
             unidad="A",
@@ -336,12 +344,14 @@ def calcular_pcc_barras(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
     for v, pcc in pcc_por_tension(proyecto).items():
         pcc_b = pcc_en_barras(pcc, v, r_total, x_total)
         resultados.append(ResultadoCalculo(
+            clave=f"pcc_barras_{v:g}kv",
             nombre=f"Pcc en barras de la SE a {v:g} kV",
             valor=pcc_b,
             unidad="MVA",
             formula=f"Pcc = V² / |j·V²/{pcc:g} + ({r_total:.4f} + j{x_total:.4f})|",
         ))
         resultados.append(ResultadoCalculo(
+            clave=f"icc_barras_{v:g}kv",
             nombre=f"Icc en barras de la SE a {v:g} kV",
             valor=corriente_cortocircuito(pcc_b, v),
             unidad="kA",
@@ -381,13 +391,14 @@ def calcular_fusibles(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
     La tabla de fusibles por potencia y tensión queda como afinamiento (regla R11).
     """
     resultados = []
-    for se in proyecto.subestaciones:
+    for i, se in enumerate(proyecto.subestaciones, start=1):
         con_celdas = se.tipo in SE_CON_CELDAS
         serie, tipo = (FUSIBLES_HH, "HH") if con_celdas else (FUSIBLES_K, "K")
-        for trafo in se.transformadores:
+        for j, trafo in enumerate(se.transformadores, start=1):
             for v in tensiones_de_calculo(proyecto):
                 in_a = corriente_nominal(trafo.kva, v)
                 resultados.append(ResultadoCalculo(
+                    clave=f"fusible_se{i}_tr{j}_{v:g}kv",
                     nombre=f"Fusible {tipo} sugerido, trafo {trafo.kva:g} kVA a {v:g} kV",
                     valor=fusible_minimo(in_a, serie),
                     unidad="A",
@@ -422,6 +433,7 @@ def calcular_puesta_tierra(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
     if sitio.factor_tratamiento_pat < 1:
         formula += f" × {sitio.factor_tratamiento_pat:g} (tratamiento)"
     return [ResultadoCalculo(
+        clave="r_pat",
         nombre="Resistencia de puesta a tierra (una varilla)",
         valor=r_final,
         unidad="Ω",
