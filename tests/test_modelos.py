@@ -84,7 +84,7 @@ def test_rechaza_pcc_con_error_de_unidades():
 
 def test_rechaza_conductor_fuera_de_catalogo():
     d = datos_sol_de_olmos()
-    d["tramos"][0]["conductor"] = "NA2XSY-95"
+    d["tramos"][0]["conductor"] = "NA2XSY-1000"
     with pytest.raises(ValidationError, match="no está en el catálogo"):
         ProyectoSU(**d)
 

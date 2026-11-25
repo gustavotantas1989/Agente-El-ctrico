@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .conductores import K_IKM, buscar_conductor
+from . import factores
 from .modelos import BaseCorriente, ProyectoSU, TipoSubestacion
 
 
@@ -228,14 +229,15 @@ def calcular_caida_tension(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
         total_v = 0.0
         for tramo in proyecto.tramos:
             c = buscar_conductor(tramo.conductor)
-            dv = caida_tension_v(i, tramo.longitud_m / 1000, c.r_ohm_km, c.x_ohm_km, cos_phi)
+            x = c.reactancia(tramo.disposicion)
+            dv = caida_tension_v(i, tramo.longitud_m / 1000, c.r_ohm_km, x, cos_phi)
             total_v += dv
             resultados.append(ResultadoCalculo(
                 nombre=f"Caída de tensión tramo '{tramo.nombre}' a {v:g} kV",
                 valor=dv,
                 unidad="V",
                 formula=(f"ΔV = √3 × {i:.2f} × {tramo.longitud_m / 1000:g} × "
-                         f"({c.r_ohm_km} × {cos_phi} + {c.x_ohm_km} × sen φ)"),
+                         f"({c.r_ohm_km} × {cos_phi} + {x} × sen φ)"),
             ))
         total_pct = caida_tension_pct(total_v, v) + previo
         formula = "ΔV% = Σ ΔV tramos / V × 100"
@@ -248,6 +250,60 @@ def calcular_caida_tension(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
             formula=formula,
             limite=admisible,
             cumple=total_pct <= admisible,
+        ))
+    return resultados
+
+
+# ---------------------------------------------------------------------------
+# Sesión 4: ampacidad corregida (capacidad de corriente del cable subterráneo)
+# ---------------------------------------------------------------------------
+
+def ampacidad_corregida(tramo) -> tuple[float, dict]:
+    """
+    I admisible = Icat × Ft × Fr × Fp × Fd × Fa, con cada factor normalizado a las
+    condiciones base del catálogo (ver motor_su/factores.py).
+    Devuelve (ampacidad en A, diccionario con cada factor) para mostrarlo en el informe.
+    """
+    c = buscar_conductor(tramo.conductor)
+    icat = c.ampacidad_base(tramo.disposicion)
+    if icat <= 0:
+        raise ValueError(f"El conductor {c.codigo} no tiene ampacidad de catálogo cargada")
+    f = {
+        "Icat": icat,
+        "Ft": factores.factor_temperatura_terreno(tramo.temperatura_terreno_c),
+        "Fr": factores.factor_resistividad_termica(tramo.resistividad_termica_kmw),
+        "Fp": factores.factor_profundidad(tramo.profundidad_m, c.seccion_mm2),
+        "Fd": factores.factor_ducto(tramo.instalacion, c.seccion_mm2),
+        "Fa": tramo.factor_agrupamiento,
+    }
+    valor = icat * f["Ft"] * f["Fr"] * f["Fp"] * f["Fd"] * f["Fa"]
+    return valor, f
+
+
+def calcular_ampacidad(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
+    """
+    Para cada tramo SUBTERRÁNEO: I admisible ≥ I de diseño.
+    Se compara con la mayor corriente de diseño (la de la tensión más baja, si hay doble tensión).
+    Los tramos aéreos se omiten hasta tener la ficha de esos conductores.
+    """
+    s = potencia_base_kva(proyecto)
+    tensiones = tensiones_de_calculo(proyecto)
+    v_min = min(tensiones)
+    i_dis = corriente_diseno(s, v_min)
+    resultados = []
+    for tramo in proyecto.tramos:
+        if tramo.tipo != "subterraneo":
+            continue
+        valor, f = ampacidad_corregida(tramo)
+        resultados.append(ResultadoCalculo(
+            nombre=f"Ampacidad corregida tramo '{tramo.nombre}' ({tramo.conductor}, {tramo.disposicion})",
+            valor=valor,
+            unidad="A",
+            formula=(f"I = {f['Icat']:g} × Ft {f['Ft']:.3f} × Fr {f['Fr']:.3f} × Fp {f['Fp']:.3f}"
+                     f" × Fd {f['Fd']:.2f} × Fa {f['Fa']:.2f}  ≥  Idis a {v_min:g} kV"),
+            limite=i_dis,
+            cumple=valor >= i_dis,
+            norma="Ficha Indeco/CELSA (IEC 60502-2) + CNE Distribución 2011, Tablas 2-XXXII, 2-XXXV, 2-XXXVI",
         ))
     return resultados
 
@@ -275,7 +331,7 @@ def calcular_pcc_barras(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
     for tramo in proyecto.tramos:
         c = buscar_conductor(tramo.conductor)
         r_total += c.r_ohm_km * tramo.longitud_m / 1000
-        x_total += c.x_ohm_km * tramo.longitud_m / 1000
+        x_total += c.reactancia(tramo.disposicion) * tramo.longitud_m / 1000
     resultados = []
     for v, pcc in pcc_por_tension(proyecto).items():
         pcc_b = pcc_en_barras(pcc, v, r_total, x_total)
@@ -382,6 +438,7 @@ def calcular_puesta_tierra(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
 def calcular_proyecto(proyecto: ProyectoSU) -> list[ResultadoCalculo]:
     """Corre toda la cadena de cálculo, en orden, y devuelve el informe completo."""
     return (calcular_corrientes(proyecto)
+            + calcular_ampacidad(proyecto)
             + calcular_cortocircuito(proyecto)
             + calcular_caida_tension(proyecto)
             + calcular_pcc_barras(proyecto)

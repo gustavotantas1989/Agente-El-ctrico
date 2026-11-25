@@ -20,7 +20,7 @@ y el modelo que los reúne: ProyectoSU.
 
 from datetime import date
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -183,6 +183,17 @@ class Tramo(BaseModel):
     nombre: str
     conductor: str = Field(description="Código del catálogo, ej. 'NA2XSY-120'")
     longitud_m: float = Field(gt=0)
+    # Condiciones de instalación (sesión 4). Solo se usan en tramos subterráneos.
+    disposicion: Literal["trebol", "plano"] = "trebol"
+    profundidad_m: float = Field(1.0, ge=0.5, le=1.5,
+                                 description="CNE-Suministro, Tabla 352-1: 1.0 m para MT")
+    temperatura_terreno_c: float = Field(25, ge=10, le=50)
+    resistividad_termica_kmw: float = Field(1.5, ge=0.5, le=3.0,
+                                            description="K·m/W (1.5 = 150 °C·cm/W)")
+    instalacion: Literal["directo", "un_ducto", "tres_ductos_plano",
+                         "tres_ductos_trebol"] = "directo"
+    factor_agrupamiento: float = Field(1.0, gt=0, le=1.0,
+                                       description="Varias ternas en la zanja; 1.0 = una sola terna")
 
     @field_validator("conductor")
     @classmethod

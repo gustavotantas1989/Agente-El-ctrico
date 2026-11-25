@@ -26,7 +26,7 @@ def test_pagina_calcula_sol_de_olmos():
     at = _calcular("Ejemplo: Sol de Olmos (subterránea, caseta, 20/10 kV)")
     assert not at.exception
     assert len(at.dataframe) == 3  # cargas, tramos y resultados
-    assert len(at.dataframe[-1].value) == 19          # los 19 resultados del motor
+    assert len(at.dataframe[-1].value) == 20          # los 20 resultados del motor
     assert "Resistencia de puesta a tierra" in at.error[0].value  # 59.85 Ω no cumple
 
 

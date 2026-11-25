@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from motor_su.calculos import calcular_proyecto, imprimir_informe
 from motor_su.conductores import CATALOGO
 from motor_su.ejemplos import EJEMPLOS
+from motor_su.factores import INSTALACIONES
 from motor_su.modelos import (
     TAMANOS_COMERCIALES_KVA, Aislamiento, BaseCorriente, Concesionaria,
     ProyectoSU, TipoRed, TipoSubestacion, TipoTramite,
@@ -27,8 +28,8 @@ st.set_page_config(page_title="Calcular sistema de utilización", page_icon="⚡
 st.title("⚡ Calcular sistema de utilización")
 st.caption(
     "Versión preliminar del motor de cálculo (Fase 2). Calcula corrientes, cortocircuito, "
-    "caída de tensión, Pcc en barras, fusible sugerido y puesta a tierra. "
-    "Aún NO calcula la ampacidad corregida. Los datos del catálogo de conductores son preliminares."
+    "ampacidad corregida, caída de tensión, Pcc en barras, fusible sugerido y puesta a tierra. "
+    "Cables subterráneos con datos oficiales de ficha (Indeco / CELSA); cables aéreos aún preliminares."
 )
 
 # ---------------------------------------------------------------------------
@@ -122,13 +123,30 @@ cos_phi = c2.number_input("cos φ", min_value=0.7, max_value=1.0, value=float(cc
 # ---------------------------------------------------------------------------
 st.header("4. Red y subestación")
 st.caption("Tramos en orden, desde el punto de diseño hasta la SE. Conductor: del catálogo interno.")
+st.caption("Condiciones de instalación (solo tramos subterráneos): sirven para la ampacidad "
+           "corregida. Resistividad térmica en K·m/W (1.5 = 150 °C·cm/W). "
+           "Agrupamiento: 1.0 si va una sola terna en la zanja.")
+_por_defecto = {"disposicion": "trebol", "profundidad_m": 1.0, "temperatura_terreno_c": 25.0,
+                "resistividad_termica_kmw": 1.5, "instalacion": "directo",
+                "factor_agrupamiento": 1.0}
+_df_tramos = pd.DataFrame(datos["tramos"])
+for _col, _val in _por_defecto.items():
+    if _col not in _df_tramos:
+        _df_tramos[_col] = _val
+    _df_tramos[_col] = _df_tramos[_col].fillna(_val)
 tramos = st.data_editor(
-    pd.DataFrame(datos["tramos"]),
+    _df_tramos,
     num_rows="dynamic", width="stretch", key=f"{k}tramos",
     column_config={
         "nombre": st.column_config.TextColumn("Tramo"),
         "conductor": st.column_config.SelectboxColumn("Conductor", options=list(CATALOGO.keys())),
         "longitud_m": st.column_config.NumberColumn("Longitud (m)", min_value=0.0),
+        "disposicion": st.column_config.SelectboxColumn("Disposición", options=["trebol", "plano"]),
+        "profundidad_m": st.column_config.NumberColumn("Profundidad (m)", min_value=0.5, max_value=1.5),
+        "temperatura_terreno_c": st.column_config.NumberColumn("T terreno (°C)", min_value=10, max_value=50),
+        "resistividad_termica_kmw": st.column_config.NumberColumn("ρ térmica (K·m/W)", min_value=0.5, max_value=3.0),
+        "instalacion": st.column_config.SelectboxColumn("Instalación", options=INSTALACIONES),
+        "factor_agrupamiento": st.column_config.NumberColumn("F. agrupamiento", min_value=0.1, max_value=1.0),
     },
 )
 c1, c2, c3 = st.columns(3)

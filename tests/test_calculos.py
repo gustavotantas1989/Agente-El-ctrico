@@ -200,7 +200,8 @@ def test_proyecto_sol_de_olmos_cumple_en_ambas_tensiones():
     totales = [r for r in resultados if r.cumple is not None]
     assert len(totales) == 2
     assert all(r.cumple for r in totales)
-    assert totales[1].valor == pytest.approx(0.0319, abs=0.0001)  # 3.19 V / 10 kV
+    # 3.17 V / 10 kV con la X oficial en trébol (0.143); el expediente declaró 3.19 V (0.6 %: dentro de ±2 %)
+    assert totales[1].valor == pytest.approx(0.0317, abs=0.0001)
 
 
 def test_caracoto_caida_minima():
@@ -313,7 +314,7 @@ def test_pat_rechaza_resistividad_cero():
 def test_calcular_proyecto_junta_toda_la_cadena():
     resultados = calcular_proyecto(ProyectoSU(**datos_sol_de_olmos()))
     # 4 corrientes + 4 cortocircuito + 4 caída + 4 Pcc barras + 2 fusibles + 1 PAT
-    assert len(resultados) == 19
+    assert len(resultados) == 20  # 19 anteriores + ampacidad del tramo
 
 
 def test_informe_lista_lo_que_no_cumple():
@@ -321,3 +322,95 @@ def test_informe_lista_lo_que_no_cumple():
     assert "INFORME DE CÁLCULO — Agropecuaria Sol de Olmos" in texto
     assert "NO CUMPLE: Resistencia de puesta a tierra" in texto
     assert "R10" in texto  # advertencia: resistividad sin fecha de medición
+
+
+# ---------------------------------------------------------------------------
+# Sesión 4: ampacidad corregida
+# ---------------------------------------------------------------------------
+from motor_su import factores
+from motor_su.calculos import ampacidad_corregida, calcular_ampacidad
+from motor_su.conductores import buscar_conductor
+from motor_su.modelos import Tramo
+
+
+def test_catalogo_usa_valores_oficiales_indeco():
+    """NA2XSY 120 mm² 18/30 kV: R 0.325, X trébol 0.143 / plano 0.213, I enterrado 252 / 260 A."""
+    c = buscar_conductor("NA2XSY-120")
+    assert c.r_ohm_km == 0.325
+    assert c.reactancia("trebol") == 0.143 and c.reactancia("plano") == 0.213
+    assert c.ampacidad_base("trebol") == 252 and c.ampacidad_base("plano") == 260
+
+
+def test_factores_valen_1_en_condiciones_base_del_catalogo():
+    """En las condiciones base de Indeco (20 °C, 1.5 K·m/W, 0.8 m) todo factor es 1."""
+    assert factores.factor_temperatura_terreno(20) == pytest.approx(1.0)
+    assert factores.factor_resistividad_termica(1.5) == pytest.approx(1.0)
+    assert factores.factor_profundidad(0.8, 120) == pytest.approx(1.0)
+    assert factores.factor_ducto("directo", 120) == 1.0
+
+
+def test_resistividad_se_normaliza_a_la_base_del_catalogo():
+    """CNE 2-XXXII: 2.5 K·m/W → 0.65 y base 1.5 K·m/W → 0.83 ⇒ factor real 0.65/0.83 = 0.783."""
+    assert factores.factor_resistividad_termica(2.5) == pytest.approx(0.65 / 0.83, abs=1e-4)
+    # Terreno mejor que el de catálogo (1.0 K·m/W) da factor > 1
+    assert factores.factor_resistividad_termica(1.0) == pytest.approx(1.0 / 0.83, abs=1e-4)
+
+
+def test_profundidad_se_normaliza_y_se_interpola():
+    assert factores.factor_profundidad(1.0, 120) == pytest.approx(0.96 / 0.98, abs=1e-4)
+    assert factores.factor_profundidad(0.9, 120) == pytest.approx(0.97 / 0.98, abs=1e-4)
+
+
+def test_ducto_depende_de_la_seccion():
+    assert factores.factor_ducto("un_ducto", 50) == 0.81
+    assert factores.factor_ducto("un_ducto", 120) == 0.79
+    assert factores.factor_ducto("tres_ductos_trebol", 240) == 0.78
+
+
+def test_factor_fuera_de_tabla_da_error():
+    with pytest.raises(ValueError, match="fuera de la tabla"):
+        factores.factor_temperatura_terreno(60)
+
+
+def test_ampacidad_sol_de_olmos_con_sus_condiciones():
+    """
+    Condiciones que declara el expediente: terreno 30 °C, 2.5 K·m/W, 1.0 m, factor de
+    proximidad 0.80. Con la ampacidad oficial (252 A trébol) y factores normalizados:
+    252 × 0.93 × 0.783 × 0.980 × 1 × 0.80 = 143.8 A.
+    El expediente declaró 214.27 A (usó Icat 300 A y Fr = 1.00): ~49 % de más.
+    """
+    tramo = Tramo(nombre="PMI - SE", conductor="NA2XSY-120", longitud_m=143.13,
+                  temperatura_terreno_c=30, resistividad_termica_kmw=2.5,
+                  profundidad_m=1.0, factor_agrupamiento=0.80)
+    valor, f = ampacidad_corregida(tramo)
+    assert valor == pytest.approx(143.8, abs=0.2)
+    assert f["Icat"] == 252
+
+
+def test_plano_tiene_mas_ampacidad_y_mas_reactancia():
+    trebol = Tramo(nombre="t", conductor="NA2XSY-120", longitud_m=100)
+    plano = Tramo(nombre="p", conductor="NA2XSY-120", longitud_m=100, disposicion="plano")
+    assert ampacidad_corregida(plano)[0] > ampacidad_corregida(trebol)[0]
+
+
+def test_calcular_ampacidad_verifica_contra_corriente_de_diseno():
+    """Sol de Olmos: se compara con Idis a 10 kV (45.47 A), la mayor de las dos tensiones."""
+    r = calcular_ampacidad(ProyectoSU(**datos_sol_de_olmos()))
+    assert len(r) == 1
+    assert r[0].limite == pytest.approx(45.47, abs=0.01)
+    assert r[0].cumple
+
+
+def test_ampacidad_detecta_cable_insuficiente():
+    d = datos_sol_de_olmos()
+    d["tramos"][0].update(conductor="NA2XSY-50", instalacion="un_ducto",
+                          temperatura_terreno_c=40, resistividad_termica_kmw=3.0,
+                          factor_agrupamiento=0.5)
+    d["subestaciones"][0]["transformadores"][0]["kva"] = 2500
+    r = calcular_ampacidad(ProyectoSU(**d))
+    assert r[0].cumple is False
+
+
+def test_tramo_aereo_no_se_verifica_por_ampacidad_aun():
+    """Caracoto es aéreo: falta la ficha del autoportante, así que no hay verificación."""
+    assert calcular_ampacidad(ProyectoSU(**datos_caracoto())) == []

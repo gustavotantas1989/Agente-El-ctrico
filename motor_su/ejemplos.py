@@ -28,7 +28,10 @@ def sol_de_olmos() -> dict:
             "fs": 0.80,
             "cos_phi": 0.85,
         },
-        "tramos": [{"nombre": "PMI - SE", "conductor": "NA2XSY-120", "longitud_m": 143.13}],
+        "tramos": [{"nombre": "PMI - SE", "conductor": "NA2XSY-120", "longitud_m": 143.13,
+                    # condiciones de instalación que declara el expediente
+                    "temperatura_terreno_c": 30, "resistividad_termica_kmw": 2.5,
+                    "profundidad_m": 1.0, "factor_agrupamiento": 0.80}],
         "subestaciones": [{
             "nombre": "SE caseta",
             "tipo": "caseta",
