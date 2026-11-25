@@ -25,7 +25,7 @@ def _calcular(ejemplo: str) -> AppTest:
 def test_pagina_calcula_sol_de_olmos():
     at = _calcular("Ejemplo: Sol de Olmos (subterránea, caseta, 20/10 kV)")
     assert not at.exception
-    assert len(at.dataframe) == 4  # cargas, tramos, resultados y valores declarados
+    assert len(at.dataframe) == 5  # cargas, tramos, resultados, declarados y menciones
     assert len(at.dataframe[2].value) == 20          # los 20 resultados del motor
     assert "Resistencia de puesta a tierra" in at.error[0].value  # 59.85 Ω no cumple
 
@@ -33,7 +33,7 @@ def test_pagina_calcula_sol_de_olmos():
 def test_pagina_calcula_caracoto():
     at = _calcular("Ejemplo: Caracoto (aérea, monoposte, 10 kV)")
     assert not at.exception
-    assert len(at.dataframe) == 4  # cargas, tramos, resultados y valores declarados
+    assert len(at.dataframe) == 5  # cargas, tramos, resultados, declarados y menciones
 
 
 def test_pagina_muestra_errores_de_datos():
@@ -53,6 +53,17 @@ def test_pagina_revisa_sol_de_olmos():
     revisar = [b for b in at.button if "Revisar" in b.label][0]
     revisar.click().run()
     assert not at.exception
-    assert "3 observación" in at.error[-1].value
+    assert any("3 observación" in e.value for e in at.error)
     contraste = at.dataframe[-1].value
     assert (contraste["Estado"] == "❌ difiere").sum() == 3
+
+
+def test_pagina_revisa_consistencia_caracoto():
+    """Caracoto: la consistencia detecta el conductor (R1) y la MD (R4)."""
+    at = _calcular("Ejemplo: Caracoto (aérea, monoposte, 10 kV)")
+    [b for b in at.button if "Revisar" in b.label][0].click().run()
+    assert not at.exception
+    assert any("2 inconsistencia" in e.value for e in at.error)
+    titulos = [e.label for e in at.expander]
+    assert any("[R1]" in t and "❌" in t for t in titulos)
+    assert any("[R4]" in t and "❌" in t for t in titulos)

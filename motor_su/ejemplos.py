@@ -142,3 +142,48 @@ def declarados_sol_de_olmos() -> list[dict]:
 DECLARADOS = {
     "Ejemplo: Sol de Olmos (subterránea, caseta, 20/10 kV)": declarados_sol_de_olmos,
 }
+
+
+def menciones_sol_de_olmos() -> list[dict]:
+    """Cómo aparece cada dato en los capítulos del expediente Sol de Olmos (para R1–R5)."""
+    return [
+        {"campo": "conductor", "valor": "NA2XSA2Y de 3-1x120 mm2, 18/30 kV", "referencia": "Memoria 1, p. 5"},
+        {"campo": "conductor", "valor": "NA2XSA2Y - 12/20 kV, 120 mm2", "referencia": "Memoria, datos técnicos"},
+        {"campo": "conductor", "valor": "NA2XSA2Y – 18/30 KV, 120 mm2", "referencia": "Esp. Técnicas 2.2"},
+        {"campo": "conductor", "valor": "3-1x120mm2 NA2XSA2Y 18/30kV", "referencia": "Cálculos 5.1, p. 47"},
+        {"campo": "longitud_m", "valor": "143.13 m", "referencia": "Memoria, datos técnicos"},
+        {"campo": "longitud_m", "valor": "L = 0.14313 km", "referencia": "Cálculos 5.1, p. 48"},
+        {"campo": "cos_phi", "valor": "0.85", "referencia": "Memoria, datos técnicos"},
+        {"campo": "cos_phi", "valor": "0.85", "referencia": "Cálculos 5.1, p. 48"},
+        {"campo": "md_kw", "valor": "500 kW", "referencia": "Memoria, máxima demanda"},
+        {"campo": "md_kw", "valor": "500 kW", "referencia": "Memoria, demanda a contratar"},
+        {"campo": "tension_kv", "valor": "20 kV", "referencia": "Memoria 1"},
+        {"campo": "pcc_mva", "valor": "130 MVA", "referencia": "Cálculos 3.2.2, p. 49"},
+        {"campo": "carta", "valor": "SGGC-SCE- 41754362-2021", "referencia": "Memoria 1"},
+    ]
+
+
+def menciones_caracoto() -> list[dict]:
+    """Expediente APROBADO de Caracoto: el conductor aparece de 4 formas y la MD con 2 valores."""
+    return [
+        {"campo": "conductor", "valor": "NA2XSA2Y-S 8,7/15 KV, 3x35 mm²", "referencia": "Memoria 1.9"},
+        {"campo": "conductor", "valor": "120 mm² - AAAC", "referencia": "Cálculos 2.1, bases de diseño"},
+        {"campo": "conductor", "valor": "NA2XSA2Y-S de 35 mm2", "referencia": "Cálculos 2.5"},
+        {"campo": "conductor", "valor": "N2XSY 1x35mm², 8,7/15 kV", "referencia": "Esp. Téc. Suministro 3.5"},
+        {"campo": "longitud_m", "valor": "20.19 m", "referencia": "Memoria 1.9"},
+        {"campo": "longitud_m", "valor": "20.19 m (vano básico)", "referencia": "Cálculos mecánicos"},
+        {"campo": "cos_phi", "valor": "0,9", "referencia": "Memoria 1.10"},
+        {"campo": "cos_phi", "valor": "0.9", "referencia": "Cálculos 2.1"},
+        {"campo": "md_kw", "valor": "35.22 kW", "referencia": "Memoria 1.10"},
+        {"campo": "md_kw", "valor": "37.30 kW", "referencia": "Cálculos 2.8"},
+        {"campo": "tension_kv", "valor": "10 kV", "referencia": "Cálculos 2.1"},
+        {"campo": "pcc_mva", "valor": "250 MVA", "referencia": "Cálculos 2.1"},
+        {"campo": "carta", "valor": "CARTA N° 071-2021-ELPU/GT-P FP", "referencia": "Memoria 1.4"},
+    ]
+
+
+# Menciones de ejemplo por nombre de ejemplo (las usa la página web)
+MENCIONES = {
+    "Ejemplo: Sol de Olmos (subterránea, caseta, 20/10 kV)": menciones_sol_de_olmos,
+    "Ejemplo: Caracoto (aérea, monoposte, 10 kV)": menciones_caracoto,
+}

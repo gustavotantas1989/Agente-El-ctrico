@@ -16,7 +16,8 @@ from pydantic import ValidationError
 
 from motor_su.calculos import calcular_proyecto, imprimir_informe
 from motor_su.conductores import CATALOGO
-from motor_su.ejemplos import DECLARADOS, EJEMPLOS
+from motor_su.ejemplos import DECLARADOS, EJEMPLOS, MENCIONES
+from motor_su.consistencia import CAMPOS, Mencion, informe_consistencia, revisar_consistencia
 from motor_su.factores import INSTALACIONES
 from motor_su.revisor import ValorDeclarado, comparar, informe_revision, resumen
 from motor_su.modelos import (
@@ -311,7 +312,8 @@ if proyecto is not None:
     # 6. Revisor v1: contraste contra lo que declara el expediente
     # -----------------------------------------------------------------------
     st.divider()
-    st.header("6. Revisar contra lo declarado en el expediente")
+    st.header("6. Revisar el expediente")
+    st.subheader("Resultados declarados (R6)")
     st.caption(
         "Escribe en la columna **Valor declarado** lo que presenta el proyectista. "
         "Deja vacío lo que el expediente no presenta. Marca **Imagen** si el resultado "
@@ -341,6 +343,28 @@ if proyecto is not None:
                 "Unidad declarada", options=["A", "kA", "V", "kV", "%", "MVA", "kVA", "Ω"]),
             "Referencia": st.column_config.TextColumn("Referencia (cap./pág.)"),
             "Imagen": st.column_config.CheckboxColumn("Imagen"),
+        },
+    )
+
+    st.subheader("Consistencia entre capítulos (R1–R5)")
+    st.caption(
+        "Copia cada dato **tal como aparece escrito** en cada capítulo (memoria, cálculos, "
+        "especificaciones, metrado, planos). Agrega filas con ➕. El Revisor verifica que "
+        "coincidan entre sí y con la carta de punto de diseño."
+    )
+    _etiqueta = {v: k for k, v in CAMPOS.items()}  # "Máxima demanda (kW)" → "md_kw"
+    _menc = [{"Dato": CAMPOS[m["campo"]], "Valor tal como está escrito": m["valor"],
+              "Referencia": m.get("referencia", ""), "Tramo": m.get("tramo", 1)}
+             for m in MENCIONES.get(eleccion, lambda: [])()]
+    menciones_df = st.data_editor(
+        pd.DataFrame(_menc, columns=["Dato", "Valor tal como está escrito", "Referencia", "Tramo"]),
+        num_rows="dynamic", hide_index=True, width="stretch", key=f"{k}menciones",
+        column_config={
+            "Dato": st.column_config.SelectboxColumn("Dato", options=list(CAMPOS.values()), required=True),
+            "Valor tal como está escrito": st.column_config.TextColumn("Valor tal como está escrito"),
+            "Referencia": st.column_config.TextColumn("Referencia (cap./pág.)"),
+            "Tramo": st.column_config.NumberColumn("Tramo", min_value=1, step=1, default=1,
+                                                   help="Solo para conductor y longitud"),
         },
     )
 
@@ -386,5 +410,34 @@ if proyecto is not None:
             "Observación": c.mensaje,
         } for c in orden]), width="stretch", hide_index=True)
 
-        st.download_button("📄 Descargar contraste (.txt)", informe_revision(comparaciones),
+        # --- Consistencia R1–R5 ---
+        menciones = []
+        for fila in menciones_df.to_dict("records"):
+            dato, valor = fila.get("Dato"), fila.get("Valor tal como está escrito")
+            if dato and isinstance(valor, str) and valor.strip():
+                tramo = fila.get("Tramo")
+                menciones.append(Mencion(
+                    campo=_etiqueta[dato], valor=valor.strip(),
+                    referencia=fila.get("Referencia") or "",
+                    tramo=int(tramo) if tramo is not None and not pd.isna(tramo) else 1))
+        hallazgos = revisar_consistencia(proyecto, menciones)
+
+        st.subheader("Consistencia entre capítulos")
+        if not hallazgos:
+            st.info("No se ingresaron datos por capítulo; no se evaluaron R1–R5.")
+        else:
+            obs_c = [h for h in hallazgos if h.es_observacion]
+            if obs_c:
+                st.error(f"{len(obs_c)} inconsistencia(s) entre capítulos")
+            else:
+                st.success("Los datos coinciden en todos los capítulos ingresados.")
+            for h in sorted(hallazgos, key=lambda h: h.consistente):
+                icono = "✅" if h.consistente else "❌"
+                with st.expander(f"{icono} [{h.regla}] {h.titulo}", expanded=not h.consistente):
+                    st.markdown(h.mensaje)
+                    for d in h.detalle:
+                        st.markdown(f"- {d}")
+
+        texto = informe_revision(comparaciones) + "\n\n" + informe_consistencia(hallazgos)
+        st.download_button("📄 Descargar revisión completa (.txt)", texto,
                            file_name=f"revision_{proyecto.nombre.replace(' ', '_')}.txt")
